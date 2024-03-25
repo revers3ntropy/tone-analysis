@@ -1,2 +1,5 @@
 /venv
 /.idea
+/params.txt
+/test_accs.txt
+/training_accs.txt
