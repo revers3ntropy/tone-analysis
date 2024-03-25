@@ -2,54 +2,19 @@ import tensorflow as tf
 import jax.numpy as jnp
 from jax import grad, jit, vmap
 from jax import random as jrandom
-from jax.scipy.special import logsumexp
+from jax.nn import selu
 import time
-import random
+import csv
 import matplotlib.pyplot as plt
 
-DATA_PATH = './tone_v1.txt'
+TRAINING_DATA_PATH = 'data/training.csv'
+TEST_DATA_PATH = 'data/validation.csv'
 
-TONES = {
-    'appreciative': 0,
-    'cautionary': 1,
-    'diplomatic': 2,
-    'direct': 3,
-    'informative': 4,
-    'inspirational': 5,
-    'thoughtful': 6,
-    'witty': 7,
-    'absurd': 8,
-    'accusatory': 9,
-    'acerbic': 10,
-    'admiring': 11,
-    'aggressive': 12,
-    'aggrieved': 13,
-    'altruistic': 14,
-    'ambivalent': 15,
-    'amused': 16,
-    'angry': 17,
-    'animated': 18,
-    'apathetic': 19,
-    'apologetic': 20,
-    'ardent': 21,
-    'arrogant': 22,
-    'assertive': 23,
-    'belligerent': 24,
-    'benevolent': 25,
-    'bitter': 26,
-    'callous': 27,
-    'candid': 28,
-    'caustic': 29,
-}
-
-TRAIN_RATIO = 0.9
-NUM_LABELS = len(TONES)
-
-SENTENCE_LEN = 32
-LAYER_SIZES = [SENTENCE_LEN, 256, 32, 30]
-STEP_SIZE = 0.002
-NUM_EPOCHS = 2000
-BATCH_SIZE = 64
+SENTENCE_LEN = 128
+LAYER_SIZES = [SENTENCE_LEN, 512, 512, 128, 16, 1]
+STEP_SIZE = 0.00001
+NUM_EPOCHS = 1000
+BATCH_SIZE = 256
 
 
 # Initialize all layers for a fully-connected neural network with sizes "sizes"
@@ -67,39 +32,35 @@ def random_layer_params(m, n, key, scale=1e-2):
     return scale * jrandom.normal(w_key, (n, m)), scale * jrandom.normal(b_key, (n,))
 
 
-def relu(x):
-    return jnp.maximum(0, x)
-
-
-def predict(params, image):
+def predict(params, sentences):
     # per-example predictions
-    activations = image
+    activations = sentences
     for w, b in params[:-1]:
         outputs = jnp.dot(w, activations) + b
-        activations = relu(outputs)
+        activations = selu(outputs)
 
     final_w, final_b = params[-1]
     logits = jnp.dot(final_w, activations) + final_b
-    return logits - logsumexp(logits)
+    # take the first element as the output, as there is one node in the output layer
+    return logits[0]
 
 
 batched_predict = vmap(predict, in_axes=(None, 0))
 
 
-def one_hot(x, k, dtype=jnp.int32):
-    """Create a one-hot encoding of x of size k."""
-    return jnp.array(x[:, None] == jnp.arange(k), dtype)
+@jit
+def accuracy(params, sentences, targets):
+    # only checks if it correctly determines positive or negative
+    target_labels = targets > 0.5
+    predicted_labels = batched_predict(params, sentences) > 0.5
+    return jnp.mean(predicted_labels == target_labels)
 
 
-def accuracy(params, images, targets):
-    target_class = jnp.argmax(targets, axis=1)
-    predicted_class = jnp.argmax(batched_predict(params, images), axis=1)
-    return jnp.mean(predicted_class == target_class)
-
-
-def loss(params, images, targets):
-    preds = batched_predict(params, images)
-    return -jnp.mean(preds * targets)
+@jit
+def loss(params, sentences, targets):
+    preds = batched_predict(params, sentences)
+    diff = preds - targets
+    return jnp.sum(diff * diff) / preds.shape[0]
 
 
 @jit
@@ -125,40 +86,34 @@ def tokenise(sentence: str) -> jnp.ndarray:
     for char in sentence:
         if char.isalnum():
             current_word += char
-        elif char == ' ':
+        elif char == ' ' and current_word:
             tokens.append(add_word(current_word))
             current_word = ''
 
     if current_word:
         tokens.append(add_word(current_word))
 
-    val = jnp.pad(jnp.array(tokens, dtype=jnp.int32), (0, SENTENCE_LEN - len(tokens)), mode='constant')
-    return val
+    if SENTENCE_LEN - len(tokens) < 0:
+        return jnp.array(tokens[:SENTENCE_LEN], dtype=jnp.int32)
+
+    return jnp.pad(jnp.array(tokens, dtype=jnp.int32), (0, SENTENCE_LEN - len(tokens)), mode='constant')
 
 
-def read_dataset():
-    with open(DATA_PATH) as f:
-        lines = list(map(lambda line: line.split(' || '), f.read().splitlines()))
-        log(f'loaded tone data ({len(lines)=} lines)')
-        return list(map(lambda x: [x[0].rstrip('.').lower(), TONES[x[1].rstrip('.').lower()]], lines))
+def read_dataset(path: str) -> list[list[str, float]]:
+    with open(path) as f:
+        reader = csv.reader(f)
+        return list(map(lambda row: [row[0], float(row[1])], reader))
 
 
-def add_mutated_data(data):
-    new_data = []
-    for sentence, tone in data:
-        new_data.append([sentence, tone])
-        # remove each character from sentence in turn
-        # assumed that this does not change the meaning of the sentence too much
-        for i in range(1, len(sentence)):
-            new_data.append([sentence[:i] + sentence[i + 1:], tone])
-    return new_data
+def add_mutated_data(data: list[list[jnp.ndarray, float]]) -> list[list[jnp.ndarray, float]]:
+    return data
 
 
-def tokenise_data(data):
+def tokenise_data(data: list[list[str, float]]) -> list[list[jnp.ndarray, float]]:
     return list(map(lambda x: [tokenise(x[0]), x[1]], data))
 
 
-def write_results(params, training_accs, test_accs):
+def write_results(params, training_accs: list[float], test_accs: list[float]):
     with open('params.txt', 'w') as f:
         f.write(params.__str__())
 
@@ -169,7 +124,7 @@ def write_results(params, training_accs, test_accs):
         f.write(test_accs.__str__())
 
 
-def plot_results(training_accs, test_accs):
+def plot_results(training_accs: list[float], test_accs: list[float]):
     plt.plot(training_accs, label='Training Accuracy')
     plt.plot(test_accs, label='Test Accuracy')
     plt.xlabel('Epoch')
@@ -179,25 +134,25 @@ def plot_results(training_accs, test_accs):
 
 
 def main():
+    total_start = time.time()
+
     # Ensure TF does not see GPU and grab all GPU memory
     tf.config.set_visible_devices([], device_type='GPU')
 
     params = init_network_params(LAYER_SIZES, jrandom.key(0))
 
-    tone_data = add_mutated_data(read_dataset())
-    random.shuffle(tone_data)
-    tone_data = tokenise_data(tone_data)
-
-    train_data, test_data = tone_data[:int(len(tone_data) * TRAIN_RATIO)], tone_data[int(len(tone_data) * TRAIN_RATIO):]
+    train_data = tokenise_data(read_dataset(TRAINING_DATA_PATH))
+    test_data = tokenise_data(read_dataset(TEST_DATA_PATH))
 
     train_data_sentences = jnp.array(list(map(lambda x: x[0], train_data)), dtype=jnp.int32)
-    train_labels = one_hot(jnp.array(list(map(lambda x: x[1], train_data)), dtype=jnp.int32), NUM_LABELS)
+    train_labels = jnp.array(list(map(lambda x: x[1], train_data)), dtype=jnp.float32)
     train_sentences = jnp.reshape(train_data_sentences, (len(train_labels), SENTENCE_LEN))
 
     test_data_sentences = jnp.array(list(map(lambda x: x[0], test_data)), dtype=jnp.int32)
-    test_labels = one_hot(jnp.array(list(map(lambda x: x[1], test_data)), dtype=jnp.int32), NUM_LABELS)
+    test_labels = jnp.array(list(map(lambda x: x[1], test_data)), dtype=jnp.float32)
     test_sentences = jnp.reshape(test_data_sentences, (len(test_labels), SENTENCE_LEN))
 
+    log(f'Loaded data in {time.time() - total_start:0.3f} seconds')
     log(f'Train: {train_sentences.shape=}, {train_labels.shape=}')
     log(f'Test: {test_sentences.shape=}, {test_labels.shape=}')
 
@@ -206,23 +161,26 @@ def main():
 
     training_start = time.time()
 
-    for epoch in range(NUM_EPOCHS):
-        start_time = time.time()
-        for i in range(0, len(train_sentences), BATCH_SIZE):
-            x, y = train_sentences[i:i + BATCH_SIZE], train_labels[i:i + BATCH_SIZE]
-            x = jnp.reshape(x, (len(x), SENTENCE_LEN))
-            params = update(params, x, y)
-        epoch_time = time.time() - start_time
+    try:
+        for epoch in range(NUM_EPOCHS):
+            start_time = time.time()
+            for i in range(0, len(train_sentences), BATCH_SIZE):
+                x, y = train_sentences[i:i + BATCH_SIZE], train_labels[i:i + BATCH_SIZE]
+                x = jnp.reshape(x, (len(x), SENTENCE_LEN))
+                params = update(params, x, y)
+            epoch_time = time.time() - start_time
 
-        train_acc = accuracy(params, train_sentences, train_labels)
-        test_acc = accuracy(params, test_sentences, test_labels)
+            train_acc = accuracy(params, train_sentences, train_labels)
+            test_acc = accuracy(params, test_sentences, test_labels)
 
-        if epoch % 10 == 0:
-            log("Epoch {} in {:0.2f} sec".format(epoch, epoch_time))
-            log("Training set accuracy {:0.3f}%".format(train_acc * 100))
-            log("Test set accuracy {:0.3f}%".format(test_acc * 100))
-        training_accs.append(float(train_acc))
-        test_accs.append(float(test_acc))
+            if epoch % 1 == 0:
+                log("Epoch {} in {:0.2f} sec".format(epoch, epoch_time))
+                log(f"Training set accuracy {train_acc * 100:0.3f}%")
+                log(f"Test set accuracy {test_acc * 100:0.3f}%")
+            training_accs.append(float(train_acc))
+            test_accs.append(float(test_acc))
+    except KeyboardInterrupt:
+        log('Training interrupted')
 
     log(f'Finished training in {time.time() - training_start:0.3f} seconds')
 
@@ -230,6 +188,7 @@ def main():
     plot_results(training_accs, test_accs)
 
     log('Results written to files')
+    log(f'Total time: {time.time() - total_start:0.3f} seconds')
 
 
 if __name__ == '__main__':
