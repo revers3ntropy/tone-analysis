@@ -11,10 +11,10 @@ TRAINING_DATA_PATH = 'data/training.csv'
 TEST_DATA_PATH = 'data/validation.csv'
 
 SENTENCE_LEN = 128
-LAYER_SIZES = [SENTENCE_LEN, 512, 512, 128, 16, 1]
+LAYER_SIZES = [SENTENCE_LEN, 512, 256, 16, 1]
 STEP_SIZE = 0.00001
-NUM_EPOCHS = 1000
-BATCH_SIZE = 256
+NUM_EPOCHS = 100000
+BATCH_SIZE = 128
 
 
 # Initialize all layers for a fully-connected neural network with sizes "sizes"
@@ -175,8 +175,8 @@ def main():
 
             if epoch % 1 == 0:
                 log("Epoch {} in {:0.2f} sec".format(epoch, epoch_time))
-                log(f"Training set accuracy {train_acc * 100:0.3f}%")
-                log(f"Test set accuracy {test_acc * 100:0.3f}%")
+                log(f"Training set accuracy {train_acc * 100:0.2f}%")
+                log(f"Test set accuracy {test_acc * 100:0.2f}%")
             training_accs.append(float(train_acc))
             test_accs.append(float(test_acc))
     except KeyboardInterrupt:
@@ -189,6 +189,22 @@ def main():
 
     log('Results written to files')
     log(f'Total time: {time.time() - total_start:0.3f} seconds')
+
+    while True:
+        try:
+            sentence = input('Enter a sentence to predict (\'exit\' to exit): ')
+        except KeyboardInterrupt:
+            break
+        if sentence == 'exit':
+            break
+        if not sentence:
+            continue
+        tokens = tokenise(sentence)
+        prediction = predict(params, tokens)
+        if prediction < 0.5:
+            print(f'Prediction: {(1 - prediction * 2) * 100}% negative')
+        else:
+            print(f'Prediction: {(prediction - 0.5) * 100}% positive')
 
 
 if __name__ == '__main__':
