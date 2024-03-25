@@ -11,9 +11,9 @@ TRAINING_DATA_PATH = 'data/training.csv'
 TEST_DATA_PATH = 'data/validation.csv'
 
 SENTENCE_LEN = 128
-LAYER_SIZES = [SENTENCE_LEN, 512, 256, 16, 1]
-STEP_SIZE = 0.00001
-NUM_EPOCHS = 100000
+LAYER_SIZES = [SENTENCE_LEN, 1024, 1024, 256, 16, 1]
+STEP_SIZE = 0.000001
+NUM_EPOCHS = 100_000
 BATCH_SIZE = 128
 
 
@@ -124,9 +124,16 @@ def write_results(params, training_accs: list[float], test_accs: list[float]):
         f.write(test_accs.__str__())
 
 
-def plot_results(training_accs: list[float], test_accs: list[float]):
+def plot_results(
+    training_accs: list[float],
+    test_accs: list[float],
+    train_baseline_from_random: float,
+    test_baseline_from_random: float
+):
     plt.plot(training_accs, label='Training Accuracy')
     plt.plot(test_accs, label='Test Accuracy')
+    plt.axhline(y=abs(0.5 - train_baseline_from_random) + 0.5, color='r', linestyle='--', label='Training Baseline')
+    plt.axhline(y=abs(0.5 - test_baseline_from_random) + 0.5, color='g', linestyle='--', label='Test Baseline')
     plt.xlabel('Epoch')
     plt.ylabel('Accuracy')
     plt.legend()
@@ -147,10 +154,12 @@ def main():
     train_data_sentences = jnp.array(list(map(lambda x: x[0], train_data)), dtype=jnp.int32)
     train_labels = jnp.array(list(map(lambda x: x[1], train_data)), dtype=jnp.float32)
     train_sentences = jnp.reshape(train_data_sentences, (len(train_labels), SENTENCE_LEN))
+    train_baseline_from_random = jnp.mean(train_labels)
 
     test_data_sentences = jnp.array(list(map(lambda x: x[0], test_data)), dtype=jnp.int32)
     test_labels = jnp.array(list(map(lambda x: x[1], test_data)), dtype=jnp.float32)
     test_sentences = jnp.reshape(test_data_sentences, (len(test_labels), SENTENCE_LEN))
+    test_baseline_from_random = jnp.mean(test_labels)
 
     log(f'Loaded data in {time.time() - total_start:0.3f} seconds')
     log(f'Train: {train_sentences.shape=}, {train_labels.shape=}')
@@ -185,7 +194,7 @@ def main():
     log(f'Finished training in {time.time() - training_start:0.3f} seconds')
 
     write_results(params, training_accs, test_accs)
-    plot_results(training_accs, test_accs)
+    plot_results(training_accs, test_accs, train_baseline_from_random, test_baseline_from_random)
 
     log('Results written to files')
     log(f'Total time: {time.time() - total_start:0.3f} seconds')
